@@ -1,0 +1,14 @@
+# APK + decompiled sources (never redistribute)
+app.apk
+raw/
+jadx_out/
+lib/
+*.apk
+
+# runtime artifacts
+__pycache__/
+server.log
+jadx.log
+shots/
+*.pyc
+.env.local

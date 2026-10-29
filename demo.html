@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QAI Chat v20.0 · 本地网关 Demo</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #12151d;
+    --panel-2: #171b25;
+    --line: #23283a;
+    --fg: #e6e9f0;
+    --dim: #8b93a7;
+    --accent: #5b8cff;
+    --user: #1d2740;
+    --ok: #3ecf8e;
+    --warn: #ffb84d;
+    --err: #ff6b6b;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.65 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 12px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .4px; }
+  .badge {
+    font: 11px/1 var(--mono); padding: 5px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim); background: var(--panel-2);
+  }
+  .badge.ok { color: var(--ok); border-color: #1e4b39; }
+  .badge.err { color: var(--err); border-color: #4b1e1e; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 13px; color: var(--fg); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  main { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
+  .msg { max-width: 860px; width: 100%; margin: 0 auto; display: flex; gap: 12px; }
+  .avatar {
+    flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    font: 12px/1 var(--mono); background: var(--panel-2); border: 1px solid var(--line); color: var(--dim);
+  }
+  .msg.user .avatar { color: #9db4ff; border-color: #263257; }
+  .msg.assistant .avatar { color: var(--ok); border-color: #1e4b39; }
+  .bubble { flex: 1; min-width: 0; }
+  .meta { font: 11px/1 var(--mono); color: var(--dim); margin-bottom: 6px; }
+  .body {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
+  }
+  .msg.user .body { background: var(--user); border-color: #2a3556; }
+  .body code { font-family: var(--mono); background: #0d1017; padding: 1px 5px; border-radius: 4px; }
+  .body pre {
+    background: #0d1017; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px; overflow-x: auto; font-family: var(--mono); font-size: 13px;
+  }
+  .cursor::after { content: "▌"; color: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .err { color: var(--err); font-family: var(--mono); font-size: 13px; }
+  footer { border-top: 1px solid var(--line); background: var(--panel); padding: 14px 18px; }
+  .composer { max-width: 860px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; min-height: 46px; max-height: 200px; padding: 12px 14px;
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 10px; font: inherit; outline: none;
+  }
+  textarea:focus { border-color: var(--accent); }
+  .hint { max-width: 860px; margin: 8px auto 0; font: 11px/1.5 var(--mono); color: var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1>QAI Chat v20.0 · 本地网关</h1>
+  <span class="badge" id="health">连接中…</span>
+  <span class="badge" id="stats">—</span>
+  <div class="spacer"></div>
+  <button id="clear">清空会话</button>
+</header>
+
+<main id="chat"></main>
+
+<footer>
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="说点什么…（Enter 发送 / Shift+Enter 换行）"></textarea>
+    <button id="send">发送</button>
+  </div>
+  <div class="hint">上游 <span id="upstream">—</span> · 非流式参数（max_tokens / temperature / stop）会被上游静默丢弃，网关已在 x_qai_ignored_params 中标注</div>
+</footer>
+
+<script>
+const API = location.origin;
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const healthEl = document.getElementById('health');
+const statsEl = document.getElementById('stats');
+let history = [];
+let busy = false;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// minimal markdown: fenced code, inline code, bold
+function render(text) {
+  const parts = text.split(/```/);
+  return parts.map((chunk, i) => {
+    if (i % 2 === 1) {
+      const firstNl = chunk.indexOf('\n');
+      const code = firstNl >= 0 ? chunk.slice(firstNl + 1) : chunk;
+      return '<pre><code>' + escapeHtml(code.replace(/\n$/, '')) + '</code></pre>';
+    }
+    return escapeHtml(chunk)
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  }).join('');
+}
+
+function addMessage(role, text) {
+  const wrap = el('div', 'msg ' + role);
+  wrap.appendChild(el('div', 'avatar', role === 'user' ? 'YOU' : 'QAI'));
+  const bubble = el('div', 'bubble');
+  const meta = el('div', 'meta', role === 'user' ? '你' : 'QAI v20');
+  const body = el('div', 'body');
+  body.innerHTML = render(text);
+  const err = el('div', 'err');
+  bubble.append(meta, body, err);
+  wrap.appendChild(bubble);
+  chat.appendChild(wrap);
+  chat.scrollTop = chat.scrollHeight;
+  return { body, meta, err, wrap };
+}
+
+async function checkHealth() {
+  try {
+    const r = await fetch(API + '/health');
+    const j = await r.json();
+    healthEl.textContent = '● ' + j.status;
+    healthEl.className = 'badge ok';
+    document.getElementById('upstream').textContent = j.upstream;
+  } catch (e) {
+    healthEl.textContent = '● 网关离线';
+    healthEl.className = 'badge err';
+  }
+}
+
+async function send() {
+  const text = input.value.trim();
+  if (!text || busy) return;
+  busy = true; sendBtn.disabled = true;
+  input.value = ''; input.style.height = 'auto';
+
+  addMessage('user', text);
+  history.push({ role: 'user', content: text });
+
+  const ui = addMessage('assistant', '');
+  ui.body.classList.add('cursor');
+  const t0 = performance.now();
+  let ttft = null, out = '';
+
+  try {
+    const resp = await fetch(API + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'qai-v20', messages: history, stream: true }),
+    });
+    if (!resp.ok) {
+      const j = await resp.json().catch(() => ({}));
+      throw new Error((j.error && j.error.message) || ('HTTP ' + resp.status));
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder('utf-8');
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        let j;
+        try { j = JSON.parse(data); } catch { continue; }
+        const ch = (j.choices && j.choices[0]) || null;
+        if (ch && ch.delta && ch.delta.content) {
+          if (ttft === null) ttft = (performance.now() - t0) / 1000;
+          out += ch.delta.content;
+          ui.body.innerHTML = render(out);
+          chat.scrollTop = chat.scrollHeight;
+        }
+        if (ch && ch.finish_reason) ui.meta.textContent = 'QAI v20 · ' + ch.finish_reason;
+        if (j.usage && j.usage.estimated) {
+          statsEl.textContent = `${j.usage.total_tokens} tok (估算) · TTFT ${ttft ? ttft.toFixed(2) : '—'}s · ${((performance.now()-t0)/1000).toFixed(2)}s`;
+        }
+      }
+    }
+    history.push({ role: 'assistant', content: out });
+  } catch (e) {
+    ui.err.textContent = '错误：' + e.message;
+  } finally {
+    ui.body.classList.remove('cursor');
+    if (!out && !ui.err.textContent) ui.body.textContent = '(空响应)';
+    busy = false; sendBtn.disabled = false; input.focus();
+  }
+}
+
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+});
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+sendBtn.addEventListener('click', send);
+document.getElementById('clear').addEventListener('click', () => {
+  history = []; chat.innerHTML = ''; statsEl.textContent = '—';
+});
+
+checkHealth();
+setInterval(checkHealth, 15000);
+addMessage('assistant', '网关已就绪。上方对话走本地网关 → 上游 aibr.elway-mobile.com，流式 SSE 转成 OpenAI chunk 格式。上游会丢弃 max_tokens / temperature / stop，不要指望能控制长度。');
+input.focus();
+</script>
+</body>
+</html>
