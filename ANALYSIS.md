@@ -413,6 +413,33 @@ prompt「用大约150字介绍长江的地理与文化意义。」，每档 8 �
 序列化必须用与签名时**完全相同的字节**（`separators=(",",":")`、`ensure_ascii=False`）。
 差一个空格就 500。这是最容易调半天的地方。
 
+### 9.7 Windows 端口"双绑定"（本条踩了两次）
+
+Windows 上 `socketserver.TCPServer.allow_reuse_address = 1` 映射到 `SO_REUSEADDR`，语义与 Linux 不同：
+**第二个进程可以成功 bind 一个已经在被监听的端口**，不会抛 `OSError`。结果是同一端口上出现两个
+LISTENING 的 PID，请求被随机分给其中一个，表现为"服务时好时坏、行为不一致"。
+
+实测（`netstat -ano | rg :8931`）：
+
+```
+TCP 127.0.0.1:8931  LISTENING  12592
+TCP 127.0.0.1:8931  LISTENING  32844     <- 两个都在跑，都以为自己拥有端口
+```
+
+所以"bind 失败"**不能**作为端口占用判据。本项目改为启动前用 `connect_ex` 主动探测：
+
+```python
+def port_already_serving(host, port) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(0.4)
+        return probe.connect_ex((host, port)) == 0
+```
+
+排查手法：`netstat -ano | rg ":<port>.*LISTENING" | awk '{print $NF}' | sort -u` 拿到**全部** PID
+逐个 `taskkill //PID <pid> //F`，只杀一个会留另一个继续占位。
+
+另外：本机 8933 / 8941 已被其它常驻服务占用，挑端口时别假设默认值可用。
+
 ## 10. 风险评估与定位建议
 
 | 维度 | 评估 |

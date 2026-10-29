@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 import time
 import uuid
@@ -260,12 +261,33 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
 
+def port_already_serving(host: str, port: int) -> bool:
+    """Windows lets a second process bind a port Python already listens on
+    (SO_REUSEADDR), so a failed bind is not a reliable "in use" signal --
+    probe with connect_ex instead, otherwise you silently get two servers
+    fighting over one port."""
+    with socket.socket() as probe:
+        probe.settimeout(0.4)
+        return probe.connect_ex((host, port)) == 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8931)
     ap.add_argument("--host", default="127.0.0.1")
     args = ap.parse_args()
-    srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    if port_already_serving(args.host, args.port):
+        raise SystemExit(
+            f"{args.host}:{args.port} is already serving something. "
+            "Pick another port with --port (see ANALYSIS.md 9.7)."
+        )
+    try:
+        srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as exc:
+        raise SystemExit(
+            f"cannot bind {args.host}:{args.port} ({exc}). "
+            "Another local service may already hold this port -- pick a free one with --port."
+        ) from exc
     srv.daemon_threads = True
     print(f"QAI v20 demo gateway -> http://{args.host}:{args.port}  (upstream {up.BASE_URL})")
     try:
