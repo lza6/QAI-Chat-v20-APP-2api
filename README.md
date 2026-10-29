@@ -8,8 +8,15 @@ RSA 公钥签名，**无账号、无设备绑定、无配额头**。
 - 网关：`demo_server.py`（OpenAI `/v1/chat/completions`，流式/非流式）
 - Demo 页：`demo.html`（浏览器实测通过）
 - 压测：`stress.py`｜测试：`test_demo.py`｜浏览器验收：`browser_test.py`
-- 深度分析：**[ANALYSIS.md](ANALYSIS.md)**
 - `research/`：逆向过程中的一次性探针脚本（模型枚举、端点扫描、needle 测试等），仅作证据保留
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [ANALYSIS.md](ANALYSIS.md) | 完整逆向分析：APK 指纹、协议、上游基建、远程配置、能力测绘、压测、7 个工程坑 |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | **可独立使用的协议规格**：签名算法（Python/Go/Node 三语言）、请求响应、错误码、能力边界 |
+| [docs/NEW-API-INTEGRATION.md](docs/NEW-API-INTEGRATION.md) | **对接 new-api 指南**：零代码 OpenAI 兼容渠道 / 原生 Go 渠道两条路径，含字段填写表、Go 参考实现、验证三层、排障表 |
 
 ## 快速开始
 
@@ -55,6 +62,15 @@ curl http://127.0.0.1:8931/v1/chat/completions \
 
 上游只有一个模型（远程配置别名 `t1`，自述 Qwen 系、知识截止约 2020、中文可用、代码能力尚可）。
 不要按 GPT-4/Claude 的预期使用它，详见 `ANALYSIS.md` 的能力测绘。
+
+## 定位
+
+本项目**只做本地 demo，不做生产渠道**：模型 7B 级、有效上下文约 1k 汉字、舒适并发 ≤5，
+够用来验证协议和低频兜底，不够承载主流量。
+
+需要在 new-api 里对接的，按 [docs/NEW-API-INTEGRATION.md](docs/NEW-API-INTEGRATION.md) 走——
+里面给了"零代码 OpenAI 兼容渠道"和"原生 Go 渠道"两条路径，以及必须做的降级动作
+（限入参长度、低倍率、并发闸门、关掉 tools/多模态）。
 
 ## 免责声明
 
